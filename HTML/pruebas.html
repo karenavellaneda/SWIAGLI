@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SWIACLI — Pruebas de Reglas Críticas</title>
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <main class="content" style="max-width:960px;">
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <h1>Pruebas Automatizadas de Reglas Críticas — SWIACLI</h1>
+          <p style="margin:0; color:var(--text-muted);">
+            Se ejecutan sobre un repositorio aislado en localStorage para no alterar tus datos principales.
+          </p>
+        </div>
+        <a href="index.html" class="btn btn-secondary">Volver a SWIACLI</a>
+      </div>
+      <div id="test-summary" class="alert alert-info">Ejecutando pruebas...</div>
+      <div id="test-results"></div>
+    </div>
+  </main>
+
+  <script type="module">
+    import { Repository } from './js/data/repository.js';
+    import { resetToSeed } from './js/data/seed.js';
+    import { createAuthService } from './js/services/authService.js';
+    import { createInventoryService } from './js/services/inventoryService.js';
+    import { createCashSalesService } from './js/services/cashSalesService.js';
+    import { createAccountingService } from './js/services/accountingService.js';
+    import { createHrService } from './js/services/hrService.js';
+    import { createScheduleAttendanceService } from './js/services/scheduleAttendanceService.js';
+    import { escapeHtml, getLocalDateString } from './js/utils/formatters.js';
+
+    function assert(condition, message) {
+      if (!condition) throw new Error(message || 'Aserción fallida');
+    }
+
+    async function assertThrowsAsync(fn, expectedSubstring) {
+      let thrown = null;
+      try {
+        await fn();
+      } catch (err) {
+        thrown = err;
+      }
+      if (!thrown) {
+        throw new Error(`Se esperaba un error (${expectedSubstring}), pero no falló.`);
+      }
+      if (expectedSubstring && !thrown.message.includes(expectedSubstring)) {
+        throw new Error(`Mensaje esperado "${expectedSubstring}", recibido: "${thrown.message}"`);
+      }
+    }
+
+    function createIsolatedEnv() {
+      const repo = new Repository(`swiacli_test_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`);
+      const authService = createAuthService(repo);
+      const inventoryService = createInventoryService(repo, authService);
+      const cashSalesService = createCashSalesService(repo, authService, inventoryService);
+      const accountingService = createAccountingService(repo, authService);
+      const hrService = createHrService(repo, authService);
+      const scheduleAttendanceService = createScheduleAttendanceService(repo, authService);
+      return {
+        repo,
+        authService,
+        inventoryService,
+        cashSalesService,
+        accountingService,
+        hrService,
+        scheduleAttendanceService
+      };
+    }
+
+    const tests = [
+      {
+        name: '1. Venta sin caja abierta debe fallar con "Abra la caja antes de vender"',
+        run: async () => {
+          const env = createIsolatedEnv();
+          await resetToSeed(env.repo);
+          await env.authService.login('vendedor', 'Clave1234');
+          await assertThrowsAsync(
+            () =>
+              env.cashSalesService.createSale({
+                items: [{ productId: 'prd-1', quantity: 1 }],
+                paymentMethod: 'EFECTIVO',
+                cashReceived: 5000
+              }),
+            'Abra la caja antes de vender'
+          );
+          env.repo.clear();
+        }
+      },
+      {
+        name: '2. Venta sin stock suficiente falla e impide guardar venta o descontar otros productos',
+        run: async () => {
+          const env = createIsolatedEnv();
+          await resetToSeed(env.repo);
+          await env.authService.login('vendedor', 'Clave1234');
+          env.cashSalesService.openCashRegister(50000);
+          const beforeStock = env.inventoryService.getProductById('prd-1').stock;
+
+          await assertThrowsAsync(
+            () =>
+              env.cashSalesService.createSale({
+                items: [
+                  { productId: 'prd-1', quantity: 1 },
+                  { productId: 'prd-4', quantity: 99 } // solo hay 5
+                ],
+                paymentMethod: 'EFECTIVO',
+                cashReceived: 999999
+              }),
+            'Stock insuficiente'
+          );
+
+          assert(env.cashSalesService.listSales({}).length === 0, 'No debió guardarse ninguna venta');
+          assert(
+            env.inventoryService.getProductById('prd-1').stock === beforeStock,
+            'No debió descontarse stock de prd-1'
+          );
+          env.repo.clear();
+        }
+      },
+      {
+        name: '3. Pago insuficiente en efectivo no permite confirmar la venta',
+        run: async () => {
+          const env = createIsolatedEnv();
+          await resetToSeed(env.repo);
+          await env.authService.login('vendedor', 'Clave1234');
+          env.cashSalesService.openCashRegister(50000);
+
+          await assertThrowsAsync(
+            () =>
+              env.cashSalesService.createSale({
+                items: [{ productId: 'prd-2', quantity: 1 }], // $6.500
+                paymentMethod: 'EFECTIVO',
+                cashReceived: 5000
+              }),
+            'es menor al total'
+          );
+          env.repo.clear();
+        }
+      },
+      {
+        name: '4. Ciclo de caja con arqueo, cancelación, diferencia obligatoria y cierre inmodificable',
+        run: async () => {
+          const env = createIsolatedEnv();
+          await resetToSeed(env.repo);
+          await env.authService.login('admin', 'Admin123');
+          env.cashSalesService.openCashRegister(100000);
+
+          // Venta de 2 tintos ($5.000) + ingreso $10.000 - egreso $5.000 => esperado = $110.000
+          env.cashSalesService.createSale({
+            items: [{ productId: 'prd-1', quantity: 2 }],
+            paymentMethod: 'EFECTIVO',
+            cashReceived: 10000
+          });
+          env.cashSalesService.registerCashMovement('INGRESO', 'Base moneda', 10000);
+          env.cashSalesService

@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SWIACLI — Cafetería y Panadería Tunja</title>
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <div class="loading-screen" role="status" aria-live="polite">
+      <div class="spinner" aria-hidden="true"></div>
+      <p>Cargando SWIACLI...</p>
+    </div>
+  </div>
+
+  <!-- Contenedor accesible para notificaciones y modales -->
+  <div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="true"></div>
+  <div id="modal-root"></div>
+
+  <!-- Librerías permitidas vía CDN para generación de reportes PDF -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.25/jspdf.plugin.autotable.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
